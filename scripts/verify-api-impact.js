@@ -12,10 +12,11 @@ async function triggerWebhook() {
         },
         commits: [
             {
-                id: '1234567890',
-                message: 'Update user API',
+                id: 'api-test-commit',
+                message: 'Update API routes',
                 timestamp: new Date().toISOString(),
-                modified: ['src/store.ts'],
+                // We simulate a change in a backend file that defines routes
+                modified: ['src/routes.ts'],
                 added: [],
                 removed: []
             }
@@ -24,6 +25,7 @@ async function triggerWebhook() {
         after: 'HEAD'
     };
 
+    console.log('Sending API impact verification webhook...');
     try {
         const response = await axios.post('http://localhost:3001/webhook/github', payload);
         console.log('Webhook sent:', response.data);

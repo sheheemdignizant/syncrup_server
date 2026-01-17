@@ -88,7 +88,7 @@ export class ImpactAnalyzer {
             console.log('[IMPACT-AI] Sending consolidated prompt to AI...');
 
             const prompt = `Analyze these code changes and provide two things:
-1. A list of changed function names (added, modified, or removed).
+1. A list of changed identifiers (function names, class names, or API paths).
 2. Whether this is a breaking API change.
 
 STRICT DEFINITION OF BREAKING CHANGE:
@@ -96,12 +96,20 @@ STRICT DEFINITION OF BREAKING CHANGE:
 - Changing the runtime structure of the return value (e.g., returning an object instead of an array).
 - Adding a required argument.
 - Removing an argument.
+- modifying an API endpoint response structure.
 
 NON-BREAKING CHANGES (DO NOT REPORT AS BREAKING):
 - Changing a specific type to 'any' or 'unknown' (Type widening is NOT breaking).
 - Adding an optional argument.
 - Internal logic changes that do not affect the output structure.
 - Refactoring or code cleanup.
+
+IMPORTANT FOR "changedFunctions":
+- Return EXACT SEARCHABLE STRINGS that other files would use to call this code.
+- If a named function changed, return the EXACT function name (e.g., "getUser", "calculateTotal").
+- If an API endpoint changed, return the EXACT URL path string used in the route definition (e.g., "/users", "/api/v1/login").
+- DO NOT return descriptive names like "POST /users handler" or "User Controller".
+- DO NOT return generic terms like "anonymous function".
 
 OLD CODE:
 \`\`\`
@@ -115,7 +123,7 @@ ${newContent.substring(0, 2000)}
 
 Respond ONLY with valid JSON in this format:
 {
-  "changedFunctions": ["funcName1", "funcName2"],
+  "changedFunctions": ["funcName1", "/api/path"],
   "isBreaking": true/false,
   "explanation": "Brief explanation of why it is breaking or not"
 }
@@ -225,11 +233,12 @@ If no functions changed, set "changedFunctions" to [].`;
 
         const affectedFiles: Array<{ repoId: string; filePath: string; reason: string; context?: string }> = [];
 
-        // Check a sample of files
-        // Use a Set to track visited files to avoid redundant processing
+        // Check files (increased limit for better coverage)
+        const limit = 500;
         const processedFiles = new Set<string>();
+        console.log(`[IMPACT-AI] Checking up to ${limit} files (found ${otherRepoFiles.length} candidates)`);
 
-        for (const file of otherRepoFiles.slice(0, 50)) {
+        for (const file of otherRepoFiles.slice(0, limit)) {
             // Normalize ID for checking
             const normalizedId = file.id.replace(/\\/g, '/').toLowerCase();
             if (processedFiles.has(normalizedId)) continue;
@@ -244,62 +253,58 @@ If no functions changed, set "changedFunctions" to [].`;
                 const absoluteFilePath = path.join(repoPath, normalizedFilePath);
 
                 const fs = require('fs');
-                if (!fs.existsSync(absoluteFilePath)) continue;
+                if (!fs.existsSync(absoluteFilePath)) {
+                    // console.warn(`[IMPACT-AI] File not found on disk: ${absoluteFilePath}`);
+                    continue;
+                }
 
                 const fileContent = fs.readFileSync(absoluteFilePath, 'utf-8');
                 const lines = fileContent.split('\n');
-                const usages: string[] = [];
                 const addedUsagesForFile = new Set<string>();
 
                 for (const fn of functionList) {
-                    if (fileContent.includes(fn)) {
+                    // Use word boundary regex for more accurate matching where appropriate
+                    // Only apply \b if the identifier starts/ends with a word character
+                    const escapedFn = fn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    const prefix = /^\w/.test(fn) ? '\\b' : '';
+                    const suffix = /\w$/.test(fn) ? '\\b' : '';
+                    const regex = new RegExp(`${prefix}${escapedFn}${suffix}`);
+
+                    if (regex.test(fileContent)) {
                         for (let i = 0; i < lines.length; i++) {
-                            if (lines[i].includes(fn)) {
+                            if (regex.test(lines[i])) {
                                 const usage = `${fn} (line ${i + 1})`;
                                 if (!addedUsagesForFile.has(usage)) {
-                                    usages.push(usage);
                                     addedUsagesForFile.add(usage);
+
+                                    // Extract context (2 lines before and after)
+                                    const startLine = Math.max(0, i - 2);
+                                    const endLine = Math.min(lines.length - 1, i + 2);
+                                    const contextSnippet = lines.slice(startLine, endLine + 1)
+                                        .map((l: string, idx: number) => {
+                                            const originalLineNum = startLine + idx + 1;
+                                            const marker = originalLineNum === (i + 1) ? '> ' : '  ';
+                                            return `${marker}${originalLineNum}: ${l}`;
+                                        })
+                                        .join('\n');
+
+                                    affectedFiles.push({
+                                        repoId: fileRepoId,
+                                        filePath: filePathStr.replace(/\\/g, '/'),
+                                        reason: `Uses modified function: ${fn}`,
+                                        context: contextSnippet
+                                    });
+                                    // Found a usage for this function in this file, move to next function or next file?
+                                    // We want all usages, but maybe one per function per file is enough for the alert?
+                                    // Let's break the line loop for this function, so we don't report every single line
+                                    break;
                                 }
-
-                                // Extract context (3 lines before and after)
-                                const startLine = Math.max(0, i - 2);
-                                const endLine = Math.min(lines.length - 1, i + 2);
-                                const contextSnippet = lines.slice(startLine, endLine + 1)
-                                    .map((l: string, idx: number) => {
-                                        const originalLineNum = startLine + idx + 1;
-                                        const marker = originalLineNum === (i + 1) ? '> ' : '  ';
-                                        return `${marker}${originalLineNum}: ${l}`;
-                                    })
-                                    .join('\n');
-
-                                affectedFiles.push({
-                                    repoId: fileRepoId,
-                                    filePath: filePathStr.replace(/\\/g, '/'),
-                                    reason: `Uses modified function: ${fn}`,
-                                    context: contextSnippet
-                                });
-                                break; // Only report first usage per function per file to avoid noise
                             }
                         }
                     }
                 }
-
-                // If we found usages, we likely already pushed to affectedFiles inside the loop
-                // BUT the original code was collecting all usages and pushing ONCE at the end.
-                // Let's rely on the push inside the loop for better context mapping.
-                // However, the original code had this block:
-                /*
-                if (usages.length > 0) {
-                    affectedFiles.push({
-                        repoId: fileRepoId,
-                        filePath: filePathStr.replace(/\\/g, '/'), // Return consistent forward slashes
-                        reason: `Uses modified functions: ${usages.join(', ')}`
-                    });
-                }
-                */
-                // Refactored to push immediately when found to attach context.
             } catch (err) {
-                // Ignore file read errors
+                console.error(`[IMPACT-AI] Error reading file ${file.id}:`, err);
             }
         }
 

@@ -17,7 +17,11 @@ export class ProjectService {
                     include: {
                         scans: {
                             include: {
-                                impactReports: true
+                                impactReports: {
+                                    include: {
+                                        affectedFiles: true
+                                    }
+                                }
                             }
                         }
                     }
@@ -112,7 +116,11 @@ export class ProjectService {
             include: {
                 scans: {
                     include: {
-                        impactReports: true
+                        impactReports: {
+                            include: {
+                                affectedFiles: true
+                            }
+                        }
                     }
                 }
             }
@@ -131,11 +139,43 @@ export class ProjectService {
     }
 
     async createImpactReport(scanId: string, summary: any) {
-        return prisma.impactReport.create({
+        const report = await prisma.impactReport.create({
             data: {
                 scanId,
                 summary: JSON.stringify(summary)
             }
+        });
+
+        if (summary.affectedFiles && summary.affectedFiles.length > 0) {
+            for (const file of summary.affectedFiles) {
+                await prisma.affectedFile.create({
+                    data: {
+                        impactReportId: report.id,
+                        repoId: file.repoId,
+                        filePath: file.filePath,
+                        reason: file.reason,
+                        context: file.context || ''
+                    }
+                });
+            }
+        }
+
+        return report;
+    }
+
+    async updateAffectedFileStatus(id: string, status: string) {
+        return prisma.affectedFile.update({
+            where: { id },
+            data: {
+                status,
+                resolvedAt: status === 'RESOLVED' ? new Date() : null
+            }
+        });
+    }
+
+    async getAffectedFile(id: string) {
+        return prisma.affectedFile.findUnique({
+            where: { id }
         });
     }
 

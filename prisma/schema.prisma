@@ -56,4 +56,19 @@ model ImpactReport {
   scan      Scan     @relation(fields: [scanId], references: [id])
   summary   String   @db.Text // JSON string of impact summary
   createdAt DateTime @default(now())
+  affectedFiles AffectedFile[]
+}
+
+model AffectedFile {
+  id              String       @id @default(uuid())
+  impactReportId  String
+  impactReport    ImpactReport @relation(fields: [impactReportId], references: [id])
+  repoId          String
+  filePath        String
+  reason          String
+  context         String?      @db.Text
+  status          String       @default("PENDING") // PENDING, RESOLVED, REJECTED
+  resolvedAt      DateTime?
+  
+  @@unique([impactReportId, repoId, filePath])
 }

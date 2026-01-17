@@ -8,8 +8,12 @@ import { AIController } from './controllers/AIController';
 import { WebhookController } from './controllers/WebhookController';
 import { setIO } from './services/SocketService';
 
+import { ImpactController } from './controllers/ImpactController';
+
 const app = express();
 const httpServer = createServer(app);
+
+
 
 // IMPORTANT: Body parser MUST come before routes
 app.use(cors({
@@ -57,6 +61,9 @@ app.post('/webhook/gitlab', WebhookController.handleGitLab);
 app.post('/ai/enrich', AIController.enrichNode);
 app.post('/ai/analyze-impact', AIController.analyzeImpact);
 app.post('/ai/classify-change', AIController.classifyChange);
+
+// Impact Routes
+app.patch('/impacts/file/:id/status', ImpactController.updateFileStatus);
 
 const PORT = process.env.PORT || 3001;
 
