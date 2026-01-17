@@ -10,7 +10,12 @@ export interface ImpactResult {
         repoId: string;
         filePath: string;
         reason: string;
+        context?: string; // Code snippet showing usage
     }>;
+    diff?: {
+        oldContent: string;
+        newContent: string;
+    };
     isBreaking: boolean;
     severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
     explanation: string;
@@ -146,9 +151,14 @@ If no functions changed, set "changedFunctions" to [].`;
         // Combine both types of affected files
         const allAffectedFiles = [...graphAffectedFiles, ...semanticAffectedFiles];
 
-        // Remove duplicates
+        // Remove duplicates with strict normalization
         const uniqueAffectedFiles = Array.from(
-            new Map(allAffectedFiles.map(f => [`${f.repoId}:${f.filePath}`, f])).values()
+            new Map(allAffectedFiles.map(f => {
+                // Normalize both repoId and filePath to ensure strict uniqueness
+                // Handle Windows/Unix path differences
+                const normalizedPath = f.filePath.replace(/\\/g, '/').toLowerCase();
+                return [`${f.repoId}:${normalizedPath}`, f];
+            })).values()
         );
 
 
@@ -186,7 +196,8 @@ If no functions changed, set "changedFunctions" to [].`;
             isBreaking,
             severity,
             explanation,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            diff: (oldContent && newContent) ? { oldContent, newContent } : undefined
         };
     }
 
@@ -197,7 +208,7 @@ If no functions changed, set "changedFunctions" to [].`;
         graph: any,
         sourceRepoId: string,
         changedFunctions: string[]
-    ): Promise<Array<{ repoId: string; filePath: string; reason: string }>> {
+    ): Promise<Array<{ repoId: string; filePath: string; reason: string; context?: string }>> {
         console.log(`[IMPACT-AI] Scanning for usages of: ${changedFunctions.join(', ')}`);
 
         // Filter valid function names to avoid false positives
@@ -212,10 +223,18 @@ If no functions changed, set "changedFunctions" to [].`;
             n.id.match(/\.(ts|tsx|js|jsx)$/)
         );
 
-        const affectedFiles: Array<{ repoId: string; filePath: string; reason: string }> = [];
+        const affectedFiles: Array<{ repoId: string; filePath: string; reason: string; context?: string }> = [];
 
         // Check a sample of files
+        // Use a Set to track visited files to avoid redundant processing
+        const processedFiles = new Set<string>();
+
         for (const file of otherRepoFiles.slice(0, 50)) {
+            // Normalize ID for checking
+            const normalizedId = file.id.replace(/\\/g, '/').toLowerCase();
+            if (processedFiles.has(normalizedId)) continue;
+            processedFiles.add(normalizedId);
+
             const [fileRepoId, ...pathParts] = file.id.split(':');
             const filePathStr = pathParts.join(':');
 
@@ -230,25 +249,55 @@ If no functions changed, set "changedFunctions" to [].`;
                 const fileContent = fs.readFileSync(absoluteFilePath, 'utf-8');
                 const lines = fileContent.split('\n');
                 const usages: string[] = [];
+                const addedUsagesForFile = new Set<string>();
 
                 for (const fn of functionList) {
                     if (fileContent.includes(fn)) {
                         for (let i = 0; i < lines.length; i++) {
                             if (lines[i].includes(fn)) {
-                                usages.push(`${fn} (line ${i + 1})`);
-                                break;
+                                const usage = `${fn} (line ${i + 1})`;
+                                if (!addedUsagesForFile.has(usage)) {
+                                    usages.push(usage);
+                                    addedUsagesForFile.add(usage);
+                                }
+
+                                // Extract context (3 lines before and after)
+                                const startLine = Math.max(0, i - 2);
+                                const endLine = Math.min(lines.length - 1, i + 2);
+                                const contextSnippet = lines.slice(startLine, endLine + 1)
+                                    .map((l: string, idx: number) => {
+                                        const originalLineNum = startLine + idx + 1;
+                                        const marker = originalLineNum === (i + 1) ? '> ' : '  ';
+                                        return `${marker}${originalLineNum}: ${l}`;
+                                    })
+                                    .join('\n');
+
+                                affectedFiles.push({
+                                    repoId: fileRepoId,
+                                    filePath: filePathStr.replace(/\\/g, '/'),
+                                    reason: `Uses modified function: ${fn}`,
+                                    context: contextSnippet
+                                });
+                                break; // Only report first usage per function per file to avoid noise
                             }
                         }
                     }
                 }
 
+                // If we found usages, we likely already pushed to affectedFiles inside the loop
+                // BUT the original code was collecting all usages and pushing ONCE at the end.
+                // Let's rely on the push inside the loop for better context mapping.
+                // However, the original code had this block:
+                /*
                 if (usages.length > 0) {
                     affectedFiles.push({
                         repoId: fileRepoId,
-                        filePath: filePathStr,
+                        filePath: filePathStr.replace(/\\/g, '/'), // Return consistent forward slashes
                         reason: `Uses modified functions: ${usages.join(', ')}`
                     });
                 }
+                */
+                // Refactored to push immediately when found to attach context.
             } catch (err) {
                 // Ignore file read errors
             }
@@ -261,7 +310,7 @@ If no functions changed, set "changedFunctions" to [].`;
      * Find all files affected by a change
      */
     private findAffectedFiles(graph: any, changedNodeId: string, sourceRepoId: string) {
-        const affected: Array<{ repoId: string; filePath: string; reason: string }> = [];
+        const affected: Array<{ repoId: string; filePath: string; reason: string; context?: string }> = [];
         const visited = new Set<string>();
 
         // BFS to find all dependent files

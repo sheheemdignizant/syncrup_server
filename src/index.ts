@@ -12,15 +12,20 @@ const app = express();
 const httpServer = createServer(app);
 
 // IMPORTANT: Body parser MUST come before routes
-app.use(cors());
+app.use(cors({
+    origin: ['http://localhost:5173', 'http://localhost:5174'],
+    credentials: true
+}));
 app.use(express.json({ limit: '10mb' })); // Increased limit for large payloads
 app.use(express.urlencoded({ extended: true }));
 
 // Setup Socket.IO with CORS
+// Setup Socket.IO with CORS
 const io = new Server(httpServer, {
     cors: {
-        origin: 'http://localhost:5173',
-        methods: ['GET', 'POST']
+        origin: ['http://localhost:5173', 'http://localhost:5174'],
+        methods: ['GET', 'POST'],
+        credentials: true
     }
 });
 
@@ -41,6 +46,8 @@ app.post('/projects', ProjectController.createProject);
 app.get('/projects', ProjectController.getProjects);
 app.post('/repos', ProjectController.addRepo);
 app.get('/graph', ProjectController.getGraph);
+app.post('/dependencies', ProjectController.createDependency);
+app.delete('/dependencies', ProjectController.deleteDependency);
 
 // Webhook Routes
 app.post('/webhook/github', WebhookController.handleGitHub);

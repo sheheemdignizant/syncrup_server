@@ -24,6 +24,19 @@ model Repository {
   branch    String   @default("main")
   status    String   // PENDING, INDEXED, FAILED
   scans     Scan[]
+  outgoingDeps RepoDependency[] @relation("SourceRepo")
+  incomingDeps RepoDependency[] @relation("TargetRepo")
+}
+
+model RepoDependency {
+  id        String     @id @default(uuid())
+  sourceRepoId String
+  targetRepoId String
+  sourceRepo Repository @relation("SourceRepo", fields: [sourceRepoId], references: [id])
+  targetRepo Repository @relation("TargetRepo", fields: [targetRepoId], references: [id])
+  createdAt DateTime   @default(now())
+
+  @@unique([sourceRepoId, targetRepoId])
 }
 
 model Scan {

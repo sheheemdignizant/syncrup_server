@@ -90,4 +90,22 @@ export class GraphService {
         this.edges = [];
         this.save();
     }
+
+    public removeNodesByRepoId(repoId: string) {
+        // 1. Identify nodes to remove (where metadata.repoId == repoId)
+        const nodesToRemove = Array.from(this.nodes.values())
+            .filter(node => node.metadata && node.metadata.repoId === repoId)
+            .map(node => node.id);
+
+        // 2. Remove nodes
+        nodesToRemove.forEach(id => this.nodes.delete(id));
+
+        // 3. Remove edges connected to these nodes
+        this.edges = this.edges.filter(edge =>
+            !nodesToRemove.includes(edge.source) && !nodesToRemove.includes(edge.target)
+        );
+
+        this.save();
+        console.log(`[GRAPH] Removed ${nodesToRemove.length} nodes for repo ${repoId}`);
+    }
 }

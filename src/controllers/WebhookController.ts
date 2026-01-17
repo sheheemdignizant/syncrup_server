@@ -132,12 +132,39 @@ export class WebhookController {
             // Only emit if there are affected files
             if (impact.affectedFiles.length > 0) {
                 console.log(`[WEBHOOK] Impact detected for ${filePath}:`, impact.affectedFiles.length, 'files affected');
+
+                // Persist Result
+                try {
+                    // 1. Create Scan Record
+                    const scan = await projectService.createScan(
+                        targetRepo.id,
+                        payload.after || 'unknown',
+                        'COMPLETED'
+                    );
+
+                    // 2. Create Impact Report
+                    await projectService.createImpactReport(scan.id, impact);
+                    console.log(`[WEBHOOK] Impact persisted to DB for scan ${scan.id}`);
+                } catch (dbError) {
+                    console.error('[WEBHOOK] Failed to persist impact to DB:', dbError);
+                }
+
                 impact.affectedFiles.forEach(f => {
                     console.log(`  - ${f.filePath} (${f.reason})`);
                 });
 
                 // Emit WebSocket event
                 io.emit('impact:detected', impact);
+
+                // ALSO Emit repository:updated so history panel refreshes
+                // We need to fetch the Full repo with scans to send the update
+                const updatedRepo = await projectService.getRepo(targetRepo.id);
+                if (updatedRepo) {
+                    io.emit('repository:updated', {
+                        projectId: targetProject.id,
+                        repository: updatedRepo
+                    });
+                }
             }
         }
     }

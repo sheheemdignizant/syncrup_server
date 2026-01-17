@@ -19,6 +19,7 @@
     "@prisma/client": "^5.22.0",
     "@typescript-eslint/parser": "^8.53.0",
     "@typescript-eslint/types": "^8.53.0",
+    "axios": "^1.13.2",
     "cors": "^2.8.5",
     "crypto": "^1.0.1",
     "dotenv": "^17.2.3",
